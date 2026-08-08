@@ -13,15 +13,16 @@ function formatK(n: number): string {
 }
 
 const RangeSpec = Type.Object({
-  startId: Type.String({ description: 'Message ref, e.g. "m00005" (from the acp tag), or a block id "b3".' }),
-  endId: Type.String({ description: 'Inclusive end ref. Must be at or after startId.' }),
+  startId: Type.Optional(Type.String({ description: 'Message ref, e.g. "m00005" (from the acp tag), or a block id "b3". Omit when using blockIds.' })),
+  endId: Type.Optional(Type.String({ description: 'Inclusive end ref. Must be at or after startId. Omit when using blockIds.' })),
+  blockIds: Type.Optional(Type.Array(Type.String(), { description: 'Explicit block ids to distill into one higher-tier block (T2/T3), e.g. ["b3","b7"]. Use for non-contiguous blocks: consumes exactly these blocks and leaves raw messages between them visible. Takes precedence over startId/endId.' })),
   summary: Type.String({ description: "Complete technical summary replacing all content in range. Keep only essential details (conclusions, file paths, decisions, exact values, etc.)." }),
   topic: Type.Optional(Type.String({ description: "Short label (3-5 words) for THIS range, e.g. 'Auth System Exploration'. Omit to use top-level topic. When compressing multiple unrelated ranges, give each its own topic for better quality." })),
 });
 
 const CompressParams = Type.Object({
   topic: Type.Optional(Type.String({ description: "Fallback topic for entries without their own. Omit when each content entry specifies its own topic." })),
-  content: Type.Array(RangeSpec, { description: "One or more ranges to compress, each with start/end boundaries and a summary. When compressing multiple unrelated ranges in one call, give each its own topic." }),
+  content: Type.Array(RangeSpec, { description: "One or more ranges to compress. Each entry uses EITHER startId+endId (a contiguous range) OR blockIds (distill specific blocks into a higher tier). When compressing multiple unrelated ranges in one call, give each its own topic." }),
   summaryMaxChars: Type.Optional(Type.Number({ description: "Override max summary length (default max: 20000 chars). Use when content is important and needs more detail — don't lose critical info just to fit the limit." })),
 });
 
@@ -32,10 +33,11 @@ export function makeCompressTool(runtime: AcpRuntime): ToolDefinition<typeof Com
     name: "compress",
     label: "Compress",
     description:
-      "Replace older conversation ranges with detailed summaries you write. Single range: compress({ content: [{ startId, endId, summary }] }). Batch: compress({ content: [{ topic, startId, endId, summary }, ...] }) — each entry gets its own summary.",
-    promptSnippet: "compress({ content: [{ startId, endId, summary }] }) or batch multiple ranges",
+      "Replace older conversation ranges with detailed summaries you write. Single range: compress({ content: [{ startId, endId, summary }] }). T2/T3 block distillation (non-contiguous blocks): compress({ content: [{ blockIds: [\"b3\",\"b7\"], summary }] }) — consumes exactly those blocks. Batch: compress({ content: [{ topic, startId, endId, summary }, ...] }) — each entry gets its own summary.",
+    promptSnippet: "compress({ content: [{ startId, endId, summary }] }) or { blockIds: [...], summary }, or batch",
     promptGuidelines: [
       "Each message has an acp tag with its mNNNNN ref, token size, and type. Compress ranges by their refs.",
+      "For T2/T3 distillation of specific blocks, use blockIds: [\"b3\",\"b7\"] — consumes exactly those blocks (non-contiguous OK).",
       "Batch multiple unrelated ranges in one call — each gets its own topic and summary.",
       "Write dense, self-contained summaries — preserve file paths, signatures, errors, and decisions verbatim.",
       "Never compress content the current step is actively using.",
@@ -51,6 +53,13 @@ export function makeCompressTool(runtime: AcpRuntime): ToolDefinition<typeof Com
 async function handleCompress(args: CompressArgs, runtime: AcpRuntime, ctx: ExtensionContext, toolCallId?: string): Promise<string> {
   const ranges = args.content ?? [];
   if (ranges.length === 0) return "No ranges provided.";
+  for (const r of ranges) {
+    const hasBlockIds = r.blockIds && r.blockIds.length > 0;
+    const hasRefs = r.startId && r.endId;
+    if (!hasBlockIds && !hasRefs) {
+      return `Each content entry needs either startId+endId or blockIds. Entry missing both (summary starts: "${r.summary.slice(0, 40)}").`;
+    }
+  }
   const { state, coreMessages } = await runtime.stateFor(ctx);
   const config = runtime.configFor(ctx);
 
@@ -61,7 +70,7 @@ async function handleCompress(args: CompressArgs, runtime: AcpRuntime, ctx: Exte
   debug.event("compress-in", {
     sid: ctx.sessionManager.getSessionId(),
     ranges: ranges.length,
-    spans: ranges.map((r) => ({ span: `${r.startId}..${r.endId}`, summaryLen: r.summary.length, summary: r.summary, topic: r.topic ?? topLevelTopic ?? null })),
+    spans: ranges.map((r) => ({ span: r.blockIds && r.blockIds.length > 0 ? `blockIds:[${r.blockIds.join(",")}]` : `${r.startId}..${r.endId}`, summaryLen: r.summary.length, summary: r.summary, topic: r.topic ?? topLevelTopic ?? null })),
     blocksBefore: state.blocks.length,
     activeBefore: state.blocks.filter((b) => b.active).length,
     beforeMsgCount: coreMessages.length,
@@ -69,7 +78,7 @@ async function handleCompress(args: CompressArgs, runtime: AcpRuntime, ctx: Exte
   });
 
   const applied = runtime.core.applyCompression({
-    ranges: ranges.map((r) => ({ startRef: r.startId, endRef: r.endId, summary: r.summary, topic: r.topic ?? topLevelTopic, summaryMaxChars, compressCallId: toolCallId })),
+    ranges: ranges.map((r) => ({ startRef: r.startId, endRef: r.endId, blockIds: r.blockIds, summary: r.summary, topic: r.topic ?? topLevelTopic, summaryMaxChars, compressCallId: toolCallId })),
     messages: coreMessages,
     state,
     config,

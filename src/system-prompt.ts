@@ -53,7 +53,7 @@ MULTI-TIER COMPRESSION
 
 Summaries accumulate as the session grows. When tier-1 summaries pile up, the system injects a nudge prompting you to DISTILL old blocks into a single tier-2 summary. If tier-2 summaries also accumulate, a further nudge asks you to CONDENSE them into tier-3.
 
-To compress blocks: use block IDs as boundaries: compress({ content: [{ startId: "b3", endId: "b15", summary: "..." }] }). This deactivates the consumed blocks and creates a new higher-tier block.
+To distill blocks into a higher tier, list the exact block ids: compress({ content: [{ blockIds: ["b3","b7","b15"], summary: "..." }] }) — consumes exactly those blocks (non-contiguous OK) and creates one higher-tier block; the blocks must all be the same tier. For a contiguous block span you may instead use startId/endId: compress({ content: [{ startId: "b3", endId: "b15", summary: "..." }] }), but note a span consumes everything in the range (any intervening raw messages and blocks anchored there).
 
 ${TIER2_DISTILL_RULES}
 
