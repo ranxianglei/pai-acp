@@ -86,17 +86,21 @@ This has two practical implications:
 
 ### acp_delegate — clean-context delegation
 
-Hand a self-contained task to a fresh pi process running in a clean context. Five built-in roles, each with a tailored tool whitelist and system prompt:
+Hand a self-contained task to a fresh pi process running in a clean context. Five built-in roles, each with a system prompt and a **soft tool guardrail**:
 
 | Role | Tools | Best for |
 |------|-------|----------|
-| `reviewer` | read, bash | Read-only code review (bugs, risks, file:line) |
-| `researcher` | read, bash | Read-only codebase investigation |
+| `reviewer` | read, bash, grep, find, ls + ACP | Read-only code review (bugs, risks, file:line) |
+| `researcher` | read, bash, grep, find, ls + ACP | Read-only codebase investigation |
 | `worker` | read, edit, write, bash | Make code changes |
-| `planner` | read, bash | Analyze + propose a step-by-step plan |
-| `oracle` | read, bash | Answer questions / advise |
+| `planner` | read, bash, grep, find, ls + ACP | Analyze + propose a step-by-step plan |
+| `oracle` | read, bash, grep, find, ls + ACP | Answer questions / advise |
 
-The full delegate result is saved to a file (`/tmp/acp-delegate/<runId>.out`); the tool result and injected notification carry only the **task title + file path** (no preview) — use `read` for the details. This keeps the parent context lean.
+Read-only roles (reviewer, researcher, planner, oracle) receive a restricted tool allowlist (`read, bash, grep, find, ls`) plus ACP context tools (`compress, decompress, search_context, acp_status`) so they can manage their own context. This prevents accidental file modifications, but `bash` can bypass it - **it is a guardrail, not a security boundary**.
+
+Worker runs on Pi's full default toolset - no `--tools` allowlist is applied, so any loaded extension or custom tools (e.g. ACP, LSP, MCP) remain available. This keeps primary-task delegation fully capable. The `read, edit, write, bash` listing above reflects core tools only.
+
+The full delegate result is saved to a file (`/tmp/acp-delegate/<runId>.out`); the tool result and injected notification carry only the **task title + file path** (no preview) - use `read` for the details. This keeps the parent context lean.
 
 - **Interactive (TUI) & RPC modes**: `async:true` (default) runs the child in the background; a short completion notification is injected into the chat when it finishes.
 - **Print / JSON modes** (`pi -p`, SDK): `async:true` auto-downgrades to **synchronous** — the result returns as the tool result in the same turn (the parent exits after one turn, so background injection would be lost).

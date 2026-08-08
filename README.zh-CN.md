@@ -85,17 +85,21 @@ billion-context 通过拦截 Pi 的 `context` 事件接管上下文管理。**Pi
 
 ### acp_delegate — 干净上下文委派
 
-把一个自包含的任务交给一个运行在干净上下文中的新 pi 进程。五个内置角色,各自有定制的工具白名单和系统提示:
+把一个自包含的任务交给一个运行在干净上下文中的新 pi 进程。五个内置角色,各自有系统提示和**软工具护栏**:
 
 | 角色 | 工具 | 适用场景 |
 |------|------|----------|
-| `reviewer` | read, bash | 只读代码审查(bug、风险、file:line) |
-| `researcher` | read, bash | 只读代码库调研 |
+| `reviewer` | read, bash, grep, find, ls + ACP | 只读代码审查(bug、风险、file:line) |
+| `researcher` | read, bash, grep, find, ls + ACP | 只读代码库调研 |
 | `worker` | read, edit, write, bash | 修改代码 |
-| `planner` | read, bash | 分析 + 提出分步计划 |
-| `oracle` | read, bash | 回答问题 / 建议 |
+| `planner` | read, bash, grep, find, ls + ACP | 分析 + 提出分步计划 |
+| `oracle` | read, bash, grep, find, ls + ACP | 回答问题 / 建议 |
 
-委派的完整结果保存到文件(`/tmp/acp-delegate/<runId>.out`);工具结果和注入通知只携带**任务标题 + 文件路径**(无预览)— 需要细节时用 `read` 读取。这让父上下文保持精简。
+只读角色(reviewer、researcher、planner、oracle)获得受限工具白名单(`read, bash, grep, find, ls`)+ ACP 上下文工具(`compress, decompress, search_context, acp_status`),以便管理自己的上下文。这能防止意外修改文件,但 `bash` 可绕过 - **这是护栏,不是安全边界**。
+
+Worker 运行在 Pi 的完整默认工具集上 - 不应用 `--tools` 白名单,因此任何已加载的扩展或自定义工具(如 ACP、LSP、MCP)保持可用。这确保主任务委派能力完整。上表中的 `read, edit, write, bash` 仅反映核心工具。
+
+委派的完整结果保存到文件(`/tmp/acp-delegate/<runId>.out`);工具结果和注入通知只携带**任务标题 + 文件路径**(无预览)- 需要细节时用 `read` 读取。这让父上下文保持精简。
 
 - **交互(TUI)与 RPC 模式**:`async:true`(默认)在后台运行子进程;完成时一条简短通知注入到聊天框。
 - **Print / JSON 模式**(`pi -p`、SDK):`async:true` 自动降级为**同步** — 结果在同一轮作为工具结果返回(父进程一轮后即退出,后台注入会丢失)。

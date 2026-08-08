@@ -20,22 +20,37 @@ const SYNC_TIMEOUT_MS = 5 * 60_000;
 const RESULT_SUMMARY_CHARS = 500;
 const OUT_DIR = join(tmpdir(), "acp-delegate");
 
+/** ACP context-management tools that every restricted delegate must retain
+ *  so it can manage its own context under billion-context-pi. */
+const ACP_TOOLS = ["compress", "decompress", "search_context", "acp_status"] as const;
+
+/** Roles that receive a restricted tool allowlist. Worker is intentionally
+ *  absent - it runs on Pi's full default toolset (all extension/custom tools
+ *  stay active) so primary-task delegation is not degraded. */
+const RESTRICTED_TOOLS = "read,bash,grep,find,ls";
+
 interface AgentDef {
   prompt: string;
   tools: string;
+  /** When true, the role's `tools` are passed as a `--tools` allowlist to the
+   *  child process, and ACP context tools are automatically appended. When
+   *  absent/false, the child runs on Pi's full default toolset. */
+  restricted?: boolean;
 }
 
 // Minimal roster. The tool description lists these so the model knows how to
 // pick one — no separate prompt injection needed (keeps fixed cost tiny).
 const AGENTS: Record<string, AgentDef> = {
   reviewer: {
-    tools: "read,bash",
+    tools: RESTRICTED_TOOLS,
+    restricted: true,
     prompt: `You are a senior code reviewer with read-only access.
 Read the given code and report: bugs, security/safety risks, correctness issues, and concrete improvement suggestions.
 Be specific — cite file:line for every finding. Do NOT modify any files; only read and report.`,
   },
   researcher: {
-    tools: "read,bash",
+    tools: RESTRICTED_TOOLS,
+    restricted: true,
     prompt: `You are a code researcher with read-only access.
 Investigate the codebase to answer the question thoroughly. Report findings with exact file:line references, function/type signatures, and relevant code snippets.
 Do NOT modify any files; only read and report.`,
@@ -47,13 +62,15 @@ Make exactly the requested code changes — minimal, focused, following existing
 After editing, briefly summarize what you changed and why. Do not expand scope.`,
   },
   planner: {
-    tools: "read,bash",
+    tools: RESTRICTED_TOOLS,
+    restricted: true,
     prompt: `You are a technical planner with read-only access.
 Analyze the task and produce a concrete, ordered step-by-step implementation plan with rationale for each step.
 Cite file:line for code you reference. Do NOT modify any files; only read and propose.`,
   },
   oracle: {
-    tools: "read,bash",
+    tools: RESTRICTED_TOOLS,
+    restricted: true,
     prompt: `You are an expert advisor with read-only access.
 Answer the question concisely with clear reasoning. Cite file:line when referencing code. Do NOT modify any files.`,
   },
@@ -139,7 +156,7 @@ const agentListLine = (name: string): string => {
     planner: "analyze + propose step-by-step plan (read-only)",
     oracle: "answer questions / advise (read-only)",
   };
-  return `  • ${name} — ${blurb[name]} [tools: ${def.tools}]`;
+  return `  • ${name} - ${blurb[name]} [tools: ${def.tools}${def.restricted ? " + ACP context tools" : ""}]`;
 };
 
 export function makeDelegateTool(pi: ExtensionAPI): ToolDefinition<typeof DelegateParams> {
@@ -481,7 +498,7 @@ async function runDelegate(
   return formatSyncResult(args.agent, runId, args.task, result, file);
 }
 
-async function buildChildArgs(
+export async function buildChildArgs(
   args: DelegateArgs,
   rolePrompt: string,
   ctx: ExtensionContext,
@@ -493,6 +510,17 @@ async function buildChildArgs(
   await writeFile(promptFile, `${rolePrompt}\n\n---\n\nComplete the task below.`, "utf8");
 
   const cliArgs = ["-p", "--no-session", "--append-system-prompt", promptFile];
+
+  // Restricted roles receive a tailored --tools allowlist. Worker and
+  // unknown agents are left on Pi's full default toolset (all extension/
+  // custom tools stay active). The allowlist is a *soft guardrail*: it
+  // prevents accidental edit/write by read-only roles, but bash can bypass
+  // it - this is not a security boundary.
+  const agentDef = AGENTS[args.agent];
+  if (agentDef?.restricted) {
+    const merged = [...new Set([...agentDef.tools.split(",").map(s => s.trim()), ...ACP_TOOLS])];
+    cliArgs.push("--tools", merged.join(","));
+  }
 
   if (args.model && args.model.includes("/")) {
     const [providerId, ...rest] = args.model.split("/");
